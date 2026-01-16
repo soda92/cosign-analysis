@@ -54,8 +54,21 @@ class CossCrypto:
     ) -> bytes:
         h_imei = CossCrypto.sm3_hash(imei.encode("utf-8"))
         h_pin = CossCrypto.sm3_hash(pin.encode("utf-8"))
+        
+        print(f"\n[DEBUG] calculate_client_secret_scalar")
+        print(f"  IMEI: {imei}")
+        print(f"  h_imei: {h_imei.hex()}")
+        print(f"  PIN: {pin}")
+        print(f"  h_pin: {h_pin.hex()}")
+        print(f"  RandomSecret: {random_secret.hex()}")
+
         xor1 = CossCrypto.xor_bytes(h_imei, h_pin)
-        return CossCrypto.xor_bytes(xor1, random_secret)
+        print(f"  XOR1 (h_imei ^ h_pin): {xor1.hex()}")
+        
+        result = CossCrypto.xor_bytes(xor1, random_secret)
+        print(f"  Result (ClientScalar): {result.hex()}")
+        
+        return result
 
     @staticmethod
     def calculate_client_secret_point(scalar_bytes: bytes) -> bytes:
@@ -96,13 +109,21 @@ class CossCrypto:
 
     @staticmethod
     def server_sem_sign(sign_param_point_bytes, client_secret_bytes, hash_scalar_bytes):
+        print("\n[DEBUG] server_sem_sign inputs:")
+        print(f"  P (SignParam):   {sign_param_point_bytes.hex()}")
+        print(f"  d (ClientSecret): {client_secret_bytes.hex()}")
+        print(f"  e (Hash):        {hash_scalar_bytes.hex()}")
+
         P = SM2Math.decode_point(sign_param_point_bytes)
         d_client = SM2Math.bytes_to_int(client_secret_bytes)
         e_val = SM2Math.bytes_to_int(hash_scalar_bytes)
 
         # Use range [1, N-1]
-        k1 = 1 + secrets.randbelow(SM2_N - 1)
-        k2 = 1 + secrets.randbelow(SM2_N - 1)
+        # FIXED VALUES FOR DEBUGGING
+        k1 = int.from_bytes(b'\x22' * 32, "big")
+        k2 = int.from_bytes(b'\x33' * 32, "big")
+        # k1 = 1 + secrets.randbelow(SM2_N - 1)
+        # k2 = 1 + secrets.randbelow(SM2_N - 1)
 
         P1 = SM2Math.point_mul(k1, P)
         G = (SM2_Gx, SM2_Gy)
@@ -113,6 +134,10 @@ class CossCrypto:
         s1 = (r_x + e_val) % SM2_N
         s2 = (d_client * k1) % SM2_N
         s3 = (d_client * (s1 + k2)) % SM2_N
+
+        print(f"  Result [s1]: {CossCrypto.java_bigint_to_bytes(s1).hex()}")
+        print(f"  Result [s2]: {CossCrypto.java_bigint_to_bytes(s2).hex()}")
+        print(f"  Result [s3]: {CossCrypto.java_bigint_to_bytes(s3).hex()}")
 
         return [
             CossCrypto.java_bigint_to_bytes(s1),

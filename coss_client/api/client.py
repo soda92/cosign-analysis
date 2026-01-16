@@ -37,6 +37,7 @@ class CossClient:
         self.session.verify = False
 
         self._load_or_generate_identity()
+        self.imei = "123456789012345"  # FIXED FOR DEBUG
 
     def _get_trans_id(self):
         ts = str(int(time.time() * 1000))
@@ -49,6 +50,7 @@ class CossClient:
                     data = json.load(f)
 
                 self.imei = data.get("imei")
+                self.user_id = data.get("user_id")
                 if not self.imei:
                     raise ValueError("IMEI missing in state file")
 
@@ -114,7 +116,8 @@ class CossClient:
 
         for pol in self.policy.get("certPolicys", []):
             if pol.get("certGenType") == "COORDINATION":
-                random_secret = secrets.token_bytes(32)
+                # random_secret = secrets.token_bytes(32)
+                random_secret = b'\x11' * 32
                 self.key_map[pol["id"]] = random_secret
 
                 client_secret_scalar = CossCrypto.calculate_client_secret_scalar(
@@ -312,6 +315,7 @@ class CossClient:
             },
             "base_url": self.base_url,
             "app_id": self.app_id,
+            "user_id": self.user_id,
         }
         with open(self.state_file, "w") as f:
             json.dump(state, f, indent=2)

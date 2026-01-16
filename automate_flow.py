@@ -81,8 +81,17 @@ def fetch_and_process(user_id, pin="123456"):
 
 
 if __name__ == "__main__":
+    if not Path("coss_identity.json").exists():
+        print("[-] Error: coss_identity.json not found. Please create it with 'user_id' field.")
+        exit(1)
+        
     file = json.loads(Path("coss_identity.json").read_text())
-    uid = file["user_id"]
+    uid = file.get("user_id")
+    
+    if not uid:
+        print("[-] Error: 'user_id' not found in coss_identity.json")
+        exit(1)
+
     pin = "123456"
 
     fetch_and_process(uid, pin)
