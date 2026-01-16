@@ -49,6 +49,31 @@ This document details the reverse engineering of the BJCA Co-Sign Android applic
         *   `genkey`: Sends Uncompressed Point (65 bytes).
         *   `reqcert`: Sends 33-byte signed BigIntegers (if high bit set) for `s1, s2, s3`.
 
+## APK & Architecture Findings
+
+### Structure & Protection
+*   **Hybrid App**: Built with **Flutter** (UI/Business Logic) on top of a **Java/Android** host.
+*   **Packing**: Protected by **360 Jiagu**.
+    *   `com.stub.StubApp`: The packer's entry point wrapper.
+    *   `libjiagu.so`: Native packer library.
+    *   **Effect**: Original `classes.dex` contains only stub code. Real code is encrypted and loaded dynamically into memory.
+    *   **Flutter**: `libapp.so` (Dart code) was **not encrypted**, allowing string analysis.
+
+### Flutter-Java Bridge
+The app relies heavily on `FlutterBoost` for navigation and `MethodChannel` for feature delegation.
+*   **Java to Flutter**: `NativeRouter.sendEventToFlutter` sends events (e.g., scan results, auth success).
+*   **Flutter to Java**: Calls native methods via MethodChannels. Handlers are likely registered dynamically or via `FlutterBoost` page routing.
+
+### Key Java Files
+*   **`cn.org.bjca.signet.coss.app.flutter.events.CertEvents`**: The central handler for certificate operations triggered from Flutter. It orchestrates the flow between API calls and the Flutter UI.
+*   **`cn.org.bjca.signet.coss.app.flutter.CossReqCert`**: Bridges the "Download Cert" request to the underlying SDK.
+*   **`cn.org.bjca.signet.coss.impl.activity.SignetCossApiActivity`**: A translucent Activity acting as a dispatcher for SDK operations (keyed by `reqCode`).
+*   **`cn.org.bjca.signet.coss.impl.b.k`**: The core business logic for **Registration** and **Key Generation**.
+*   **`cn.org.bjca.signet.coss.impl.utils.a`**: Contains the proprietary **Key Derivation Function** (SM3 + XOR logic).
+*   **`cn.org.bjca.signet.coss.impl.CossApiCore`**: The main entry point for the Co-Sign SDK features.
+*   **`cn.org.bjca.gaia.assemb.util.CollaborateUtil`**: Implements the **SM2 Co-Signing Math** (Elliptic Curve point addition/multiplication).
+*   **`cn.org.bjca.gaia.assemb.base.JeProvider`**: A pure Java implementation of SM2/SM3/SM4 algorithms (likely a customized Bouncy Castle).
+
 ## Python Implementation (`coss_client`)
 
 A pure Python package was created to interact with the API.
