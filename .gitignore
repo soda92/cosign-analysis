@@ -15,3 +15,7 @@ wheels/
 /cosign_java
 /frida*
 /cosign.apk
+/flows
+/parsed_flows.txt
+/coss_identity.json
+
