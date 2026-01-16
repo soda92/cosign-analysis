@@ -3,11 +3,11 @@ import json
 import base64
 import secrets
 import os
+import time
 from urllib.parse import urlparse
 from ..crypto.utils import CossCrypto
 
 class CossClient:
-    # Default AppID from observation, though QR overrides it usually
     DEFAULT_APP_ID = "APP_09613F880BA343DC95E31B17096A0471"
     
     def __init__(self, base_url="https://coss.bjca.org.cn", app_id=None, state_file="coss_identity.json"):
@@ -23,6 +23,12 @@ class CossClient:
         self.key_map = {} 
         
         self._load_or_generate_identity()
+
+    def _get_trans_id(self):
+        # Hex encoded timestamp?
+        # Flow: "31373638..." -> Hex decode -> "1768..."
+        ts = str(int(time.time() * 1000))
+        return ts.encode('utf-8').hex()
 
     def _load_or_generate_identity(self):
         if os.path.exists(self.state_file):
@@ -49,7 +55,6 @@ class CossClient:
             except Exception as e:
                 print(f"[!] Failed to load state file: {e}")
         
-        # Generate correct format IMEI: Base64(SHA1(AndroidID + PackageName))
         self.imei = CossCrypto.generate_fake_imei()
         print(f"[*] Generated new identity: IMEI={self.imei}")
 
@@ -57,7 +62,6 @@ class CossClient:
         try:
             qr_json = json.loads(qr_content)
             
-            # 1. Update Base URL
             if 'sUrl' in qr_json:
                 if '/mobile/' in qr_json['sUrl']:
                     self.base_url = qr_json['sUrl'].split('/mobile/')[0]
@@ -65,12 +69,10 @@ class CossClient:
                     self.base_url = qr_json['sUrl']
                 print(f"[*] Updated Base URL: {self.base_url}")
 
-            # 2. Update App ID (Critical fix for "Access Party ID does not exist")
             if 'id' in qr_json:
                 self.app_id = qr_json['id']
                 print(f"[*] Updated App ID: {self.app_id}")
 
-            # 3. Decrypt 'o' field
             if 'o' in qr_json:
                 decrypted_o = CossCrypto.decrypt_qr_o(qr_json['o'])
                 print(f"[*] Decrypted 'o': {decrypted_o}")
@@ -94,7 +96,9 @@ class CossClient:
             "appVersion": "2.1.2",
             "osVersion": self.os_version,
             "deviceName": self.device_name,
-            "mobileID": ""
+            "mobileID": "",
+            "transId": self._get_trans_id(),
+            "version": "1.0"
         }
         
         print(f"[*] Registering with code: {real_auth_code[:10]}...")
@@ -126,8 +130,14 @@ class CossClient:
                 random_secret = secrets.token_bytes(32)
                 self.key_map[pol['id']] = random_secret
                 
-                client_secret_bytes = CossCrypto.generate_client_secret(self.imei, random_secret, pin)
-                client_secret_b64 = base64.b64encode(client_secret_bytes).decode('utf-8')
+                # 1. Compute Scalar d (Share A + PIN mix)
+                client_secret_scalar = CossCrypto.calculate_client_secret_scalar(self.imei, random_secret, pin)
+                
+                # 2. Convert to Point P = d * G
+                client_secret_point = CossCrypto.calculate_client_secret_point(client_secret_scalar)
+                
+                # 3. Base64 encode the Point
+                client_secret_b64 = base64.b64encode(client_secret_point).decode('utf-8')
                 
                 gen_key_list.append({
                     "id": pol['id'],
@@ -136,7 +146,9 @@ class CossClient:
         
         payload = {
             "data": json.dumps(gen_key_list),
-            "accessToken": self.access_token
+            "accessToken": self.access_token,
+            "transId": self._get_trans_id(),
+            "version": "1.0"
         }
         
         resp = requests.post(url, json=payload)
@@ -165,11 +177,12 @@ class CossClient:
             sign_param_bytes = base64.b64decode(param['signParam']) 
             hash_bytes = base64.b64decode(param['hash']) 
             
-            client_secret_bytes = CossCrypto.generate_client_secret(self.imei, random_secret, pin)
+            # Re-calculate scalar d for Co-Sign math
+            client_secret_scalar = CossCrypto.calculate_client_secret_scalar(self.imei, random_secret, pin)
             
             res_bytes_list = CossCrypto.server_sem_sign(
                 sign_param_bytes, 
-                client_secret_bytes, 
+                client_secret_scalar, # Pass scalar here
                 hash_bytes
             )
             
@@ -184,7 +197,9 @@ class CossClient:
             
         payload = {
             "data": json.dumps(req_list),
-            "accessToken": self.access_token
+            "accessToken": self.access_token,
+            "transId": self._get_trans_id(),
+            "version": "1.0"
         }
         
         resp = requests.post(url, json=payload)
