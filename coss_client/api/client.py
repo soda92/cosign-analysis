@@ -4,7 +4,6 @@ import base64
 import secrets
 import os
 import time
-from urllib.parse import urlparse
 from ..crypto.utils import CossCrypto
 
 # Disable warnings for self-signed certs (mitmproxy)
@@ -111,7 +110,7 @@ class CossClient:
         url = f"{self.base_url}/mobile/v1/genkey"
         gen_key_list = []
 
-        print(f"[*] Generating Keys...")
+        print("[*] Generating Keys...")
 
         for pol in self.policy.get("certPolicys", []):
             if pol.get("certGenType") == "COORDINATION":
@@ -156,7 +155,7 @@ class CossClient:
 
         req_list = []
 
-        print(f"[*] Computing Co-Signatures for Certificate Request...")
+        print("[*] Computing Co-Signatures for Certificate Request...")
 
         for param in server_params_list:
             policy_id = param["id"]

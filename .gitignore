@@ -16,6 +16,6 @@ wheels/
 /frida*
 /cosign.apk
 /flows
-/parsed_flows.txt
+# /parsed_flows.txt
 /coss_identity.json
-
+qr.*

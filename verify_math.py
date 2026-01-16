@@ -21,45 +21,47 @@ expected_s1 = "5cf36a4b690d07b7912c992a488dff1e7f6c295f5a3e59bd4cb4e35f239511be"
 expected_s2 = "19c5e7f3aa489b90ee37065db3d85967bf1626954d99637b9ecd27522f83db98"
 expected_s3 = "008218b6a485c861f09425702f9f652d4ea304f1f947bbc056797bda470796033a"
 
+
 def verify_d():
     print("[-] Verifying d_client calculation...")
     random_bytes = bytes.fromhex(random_secret_hex)
     d_bytes = CossCrypto.calculate_client_secret_scalar(imei_str, random_bytes, pin_str)
     d_calc = d_bytes.hex()
-    
+
     if d_calc == expected_d:
         print("[PASS] d_client matches!")
     else:
-        print(f"[FAIL] d_client mismatch!")
+        print("[FAIL] d_client mismatch!")
         print(f"  Calc: {d_calc}")
         print(f"  Exp:  {expected_d}")
 
+
 def verify_sign():
     print("\n[-] Verifying Co-Sign Math...")
-    
+
     P = SM2Math.decode_point(bytes.fromhex(P_hex))
     d = int(d_hex, 16)
     e = int(e_hex, 16)
     k1 = int(k1_hex, 16)
     k2 = int(k2_hex, 16)
-    
+
     # 1. Math
     P1 = SM2Math.point_mul(k1, P)
     G = (SM2_Gx, SM2_Gy)
     P2 = SM2Math.point_mul(k2, G)
     R = SM2Math.point_add(P1, P2)
     r_x = R[0]
-    
+
     s1_calc = (r_x + e) % SM2_N
     s2_calc = (d * k1) % SM2_N
     s3_calc = (d * (s1_calc + k2)) % SM2_N
-    
+
     # 2. Compare s1
     s1_bytes = CossCrypto.java_bigint_to_bytes(s1_calc)
     if s1_bytes.hex() == expected_s1:
         print("[PASS] s1 matches!")
     else:
-        print(f"[FAIL] s1 mismatch!")
+        print("[FAIL] s1 mismatch!")
         print(f"  Calc: {s1_bytes.hex()}")
         print(f"  Exp:  {expected_s1}")
 
@@ -68,7 +70,7 @@ def verify_sign():
     if s2_bytes.hex() == expected_s2:
         print("[PASS] s2 matches!")
     else:
-        print(f"[FAIL] s2 mismatch!")
+        print("[FAIL] s2 mismatch!")
         print(f"  Calc: {s2_bytes.hex()}")
         print(f"  Exp:  {expected_s2}")
 
@@ -77,9 +79,10 @@ def verify_sign():
     if s3_bytes.hex() == expected_s3:
         print("[PASS] s3 matches!")
     else:
-        print(f"[FAIL] s3 mismatch!")
+        print("[FAIL] s3 mismatch!")
         print(f"  Calc: {s3_bytes.hex()}")
         print(f"  Exp:  {expected_s3}")
+
 
 if __name__ == "__main__":
     verify_d()
