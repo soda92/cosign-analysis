@@ -52,10 +52,6 @@ class CossCrypto:
     def calculate_client_secret_scalar(
         imei: str, random_secret: bytes, pin: str
     ) -> bytes:
-        """
-        Calculates the scalar 'd' (private key share).
-        Logic: b(b(hash(IMEI), hash(PIN)), random_secret)
-        """
         h_imei = CossCrypto.sm3_hash(imei.encode("utf-8"))
         h_pin = CossCrypto.sm3_hash(pin.encode("utf-8"))
         xor1 = CossCrypto.xor_bytes(h_imei, h_pin)
@@ -64,12 +60,16 @@ class CossCrypto:
     @staticmethod
     def calculate_client_secret_point(scalar_bytes: bytes) -> bytes:
         """
-        Calculates P = d * G. Returns uncompressed bytes (04 + 32x + 32y).
-        Used for 'genkey' request.
+        Calculates P = d^-1 * G (Inverse!)
+        Based on Java: this.provider.SM2PointMul(null, this.provider.bigIntegerModInverse(bArr, ...))
         """
         d = SM2Math.bytes_to_int(scalar_bytes)
+
+        # Calculate Modular Inverse of d
+        d_inv = SM2Math.inverse(d, SM2_N)
+
         G = (SM2_Gx, SM2_Gy)
-        P = SM2Math.point_mul(d, G)
+        P = SM2Math.point_mul(d_inv, G)
 
         x_bytes = SM2Math.int_to_bytes(P[0])
         y_bytes = SM2Math.int_to_bytes(P[1])
@@ -85,21 +85,11 @@ class CossCrypto:
         if num == 0:
             return b"\x00"
 
-        # Calculate needed bytes
-        # num.bit_length() gives bits excluding sign.
-        # For positive num:
-        # if bit_length % 8 == 0, high bit is set, need extra byte 00.
-        # e.g. 128 (10000000) -> 8 bits.
-        # to_bytes(1, signed=False) -> 0x80.
-        # Java considers 0x80 as -128. So we need 0x0080.
-
         bit_len = num.bit_length()
-        # +1 for sign bit
         byte_len = (bit_len + 8) // 8
 
         b = num.to_bytes(byte_len, "big", signed=False)
 
-        # Check high bit
         if b[0] & 0x80:
             return b"\x00" + b
         return b
@@ -124,7 +114,6 @@ class CossCrypto:
         s2 = (d_client * k1) % SM2_N
         s3 = (d_client * (s1 + k2)) % SM2_N
 
-        # Use Java format for bytes
         return [
             CossCrypto.java_bigint_to_bytes(s1),
             CossCrypto.java_bigint_to_bytes(s2),
