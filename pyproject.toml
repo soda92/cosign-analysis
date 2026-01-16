@@ -1,0 +1,11 @@
+[project]
+name = "cosign-analysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "frida-dexdump>=2.0.1",
+    "frida-tools>=14.5.0",
+    "gmssl>=3.2.2",
+]
