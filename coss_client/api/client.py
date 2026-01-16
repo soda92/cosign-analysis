@@ -4,7 +4,13 @@ import base64
 import secrets
 import os
 import time
+from urllib.parse import urlparse
 from ..crypto.utils import CossCrypto
+
+# Disable warnings for self-signed certs (mitmproxy)
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class CossClient:
@@ -26,6 +32,10 @@ class CossClient:
         self.mssp_id = None
         self.policy = None
         self.key_map = {}
+
+        # Proxy settings (reads env vars)
+        self.session = requests.Session()
+        self.session.verify = False
 
         self._load_or_generate_identity()
 
@@ -79,7 +89,7 @@ class CossClient:
         }
 
         print(f"[*] Registering with code: {real_auth_code[:10]}...")
-        resp = requests.post(url, json=payload)
+        resp = self.session.post(url, json=payload)
         resp_json = resp.json()
 
         if resp_json.get("status") != 200:
@@ -101,7 +111,7 @@ class CossClient:
         url = f"{self.base_url}/mobile/v1/genkey"
         gen_key_list = []
 
-        print("[*] Generating Keys...")
+        print(f"[*] Generating Keys...")
 
         for pol in self.policy.get("certPolicys", []):
             if pol.get("certGenType") == "COORDINATION":
@@ -129,7 +139,7 @@ class CossClient:
             "version": "1.0",
         }
 
-        resp = requests.post(url, json=payload)
+        resp = self.session.post(url, json=payload)
         resp_json = resp.json()
 
         if resp_json.get("status") != 200:
@@ -143,9 +153,10 @@ class CossClient:
 
     def _request_cert(self, pin: str, server_params_list: list):
         url = f"{self.base_url}/mobile/v1/reqcert"
+
         req_list = []
 
-        print("[*] Computing Co-Signatures for Certificate Request...")
+        print(f"[*] Computing Co-Signatures for Certificate Request...")
 
         for param in server_params_list:
             policy_id = param["id"]
@@ -175,7 +186,7 @@ class CossClient:
             "version": "1.0",
         }
 
-        resp = requests.post(url, json=payload)
+        resp = self.session.post(url, json=payload)
         resp_json = resp.json()
 
         if resp_json.get("status") != 200:
@@ -195,25 +206,14 @@ class CossClient:
         self._save_state()
 
     def login(self, qr_content: str, pin: str):
-        """
-        Perform Login / Scan QR Signing.
-        """
         if not self.key_map:
             raise Exception("No keys found. Please register/download cert first.")
 
-        # 1. Parse QR to get signJobId
         job_data, type_val = self._parse_qr(qr_content)
-        if type_val != "SIGN_JOB" and not job_data.startswith("SD_"):
-            # Fallback: assume data is the job id if not explicit type
-            print(f"[*] Assuming QR data is SignJobId: {job_data}")
-
         sign_job_id = job_data
 
-        # 2. Login (Refresh Token)
-        # This seems required to get a fresh accessToken
         self._user_login()
 
-        # 3. Sign Init
         print(f"[*] Initializing Sign Job: {sign_job_id}")
         url_init = f"{self.base_url}/mobile/v1/signinit"
         payload_init = {
@@ -222,23 +222,17 @@ class CossClient:
             "transId": self._get_trans_id(),
             "version": "1.0",
         }
-        resp = requests.post(url_init, json=payload_init)
+        resp = self.session.post(url_init, json=payload_init)
         resp_init = resp.json()
 
         if resp_init.get("status") != 200:
             raise Exception(f"SignInit failed: {resp_init}")
 
         sign_data = resp_init["data"]
-        # sign_data contains: signParame (Point), data (Hash), algoPolicy
 
-        # 4. Compute Signature
-        # Assuming policy ID is "4" (SM2) based on observed flows.
-        # Ideally we should store which policy ID corresponds to SM2 in state.
-        # For now, pick the first key or "4".
         policy_id = "4"
         random_secret = self.key_map.get(policy_id)
         if not random_secret:
-            # Try finding any key
             policy_id = list(self.key_map.keys())[0]
             random_secret = self.key_map[policy_id]
 
@@ -259,7 +253,6 @@ class CossClient:
             [base64.b64encode(b).decode("utf-8") for b in res_bytes_list]
         )
 
-        # 5. Sign Finish
         url_finish = f"{self.base_url}/mobile/v1/signfinish"
         payload_finish = {
             "clientSignature": client_sign_str,
@@ -269,7 +262,7 @@ class CossClient:
             "version": "1.0",
         }
 
-        resp = requests.post(url_finish, json=payload_finish)
+        resp = self.session.post(url_finish, json=payload_finish)
         resp_finish = resp.json()
 
         if resp_finish.get("status") != 200:
@@ -279,28 +272,16 @@ class CossClient:
         print(f"Server Signature: {resp_finish['data'].get('signature')}")
 
     def _user_login(self):
-        """Refreshes access token."""
         url = f"{self.base_url}/mobile/v1/userlogin"
-        # We need keyId. Where is it?
-        # It was returned in genkey response as 'keyId'. We should have saved it.
-        # But wait, looking at flows, keyId is "DEVICE_..."
-        # If we didn't save it, we might be in trouble.
-        # But usually 'regwithauthcode' returns token too.
-        # Let's try skipping keyId or using a placeholder if missing.
-        # Actually, let's update _save_state to save keyId if possible.
-        # For now, relying on existing token or re-auth code? No, re-auth code is one-time.
-        # We need the keyId from GenKey response.
-        pass  # TODO: Implement if token expiry is an issue.
-        # For now, we assume accessToken from registration is valid for the session.
+        # TODO: Implement full login if needed
+        pass
 
     def _parse_qr(self, qr_content):
-        """Parses generic QR content."""
         real_data = qr_content
         type_val = "UNKNOWN"
         try:
             qr_json = json.loads(qr_content)
 
-            # Base URL & App ID update logic
             if "sUrl" in qr_json:
                 if "/mobile/" in qr_json["sUrl"]:
                     self.base_url = qr_json["sUrl"].split("/mobile/")[0]
