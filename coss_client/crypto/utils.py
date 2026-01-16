@@ -3,9 +3,9 @@ import secrets
 import sys
 from .sm2 import SM2Math, SM2_N, SM2_Gx, SM2_Gy
 
-# Try to import gmssl for SM3
+# Using gmssl for SM3
 try:
-    from gmssl import sm3
+    from gmssl import sm3, func
 except ImportError:
     print("Error: gmssl not installed. Please run: uv pip install gmssl")
     sys.exit(1)
@@ -13,9 +13,9 @@ except ImportError:
 class CossCrypto:
     @staticmethod
     def sm3_hash(data: bytes) -> bytes:
-        hasher = sm3.SM3()
-        hasher.update(data)
-        return bytes.fromhex(hasher.digest())
+        data_list = func.bytes_to_list(data)
+        hex_digest = sm3.sm3_hash(data_list)
+        return bytes.fromhex(hex_digest)
 
     @staticmethod
     def xor_bytes(b1: bytes, b2: bytes) -> bytes:
@@ -26,11 +26,31 @@ class CossCrypto:
         return bytes(target)
 
     @staticmethod
+    def decrypt_qr_o(encrypted_b64: str) -> str:
+        """
+        Replicates utils.a.a(String str) to decrypt the 'o' field in QR JSON.
+        Key is 'MSSPoper@2018'.
+        Logic: XOR with cyclic key, but key index is (i+1)%key_len.
+        """
+        data = base64.b64decode(encrypted_b64)
+        key = b"MSSPoper@2018"
+        
+        result = bytearray(len(data))
+        key_idx = 0
+        
+        for i in range(len(data)):
+            # Java: i++; if (i == len) i=0; xor key[i]
+            # This means for data[0], we use key[1].
+            key_idx += 1
+            if key_idx == len(key):
+                key_idx = 0
+            
+            result[i] = data[i] ^ key[key_idx]
+            
+        return result.decode('utf-8')
+
+    @staticmethod
     def generate_client_secret(imei: str, random_secret: bytes, pin: str) -> bytes:
-        """
-        Replicates utils.a.a logic: b(b(hash(IMEI), hash(PIN)), random_secret)
-        Returns RAW bytes (not base64) for use in math.
-        """
         h_imei = CossCrypto.sm3_hash(imei.encode('utf-8'))
         h_pin = CossCrypto.sm3_hash(pin.encode('utf-8'))
         xor1 = CossCrypto.xor_bytes(h_imei, h_pin)
@@ -38,45 +58,21 @@ class CossCrypto:
 
     @staticmethod
     def server_sem_sign(sign_param_point_bytes, client_secret_bytes, hash_scalar_bytes):
-        """
-        Replicates CollaborateUtil.serverSemSign logic.
-        """
-        # 1. Parse Inputs
-        # bArr -> Point P (SignParam)
         P = SM2Math.decode_point(sign_param_point_bytes)
-        
-        # bArr2 -> Scalar d (ClientSecret)
         d_client = SM2Math.bytes_to_int(client_secret_bytes)
-        
-        # bArr3 -> Scalar e (Hash)
         e_val = SM2Math.bytes_to_int(hash_scalar_bytes)
         
-        # 2. Generate Randoms k1, k2
         k1 = secrets.randbelow(SM2_N)
         k2 = secrets.randbelow(SM2_N)
         
-        # 3. Curve Math
-        # P1 = k1 * P
         P1 = SM2Math.point_mul(k1, P)
-        
-        # P2 = k2 * G
         G = (SM2_Gx, SM2_Gy)
         P2 = SM2Math.point_mul(k2, G)
-        
-        # R = P1 + P2
         R = SM2Math.point_add(P1, P2)
-        
-        # r = R.x
         r_x = R[0]
         
-        # 4. Result Calculation
-        # res[0] = (r_x + e) % n
         s1 = (r_x + e_val) % SM2_N
-        
-        # res[1] = (d_client * k1) % n
         s2 = (d_client * k1) % SM2_N
-        
-        # res[2] = (d_client * (s1 + k2)) % n
         s3 = (d_client * (s1 + k2)) % SM2_N
         
         return [
