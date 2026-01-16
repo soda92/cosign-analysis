@@ -1,6 +1,7 @@
 import base64
 import secrets
 import sys
+import hashlib
 from .sm2 import SM2Math, SM2_N, SM2_Gx, SM2_Gy
 
 # Using gmssl for SM3
@@ -18,6 +19,10 @@ class CossCrypto:
         return bytes.fromhex(hex_digest)
 
     @staticmethod
+    def sha1_hash(data: bytes) -> bytes:
+        return hashlib.sha1(data).digest()
+
+    @staticmethod
     def xor_bytes(b1: bytes, b2: bytes) -> bytes:
         target = bytearray(b1 if len(b1) >= len(b2) else b2)
         source = b1 if len(b1) < len(b2) else b2
@@ -27,11 +32,6 @@ class CossCrypto:
 
     @staticmethod
     def decrypt_qr_o(encrypted_b64: str) -> str:
-        """
-        Replicates utils.a.a(String str) to decrypt the 'o' field in QR JSON.
-        Key is 'MSSPoper@2018'.
-        Logic: XOR with cyclic key, but key index is (i+1)%key_len.
-        """
         data = base64.b64decode(encrypted_b64)
         key = b"MSSPoper@2018"
         
@@ -39,8 +39,6 @@ class CossCrypto:
         key_idx = 0
         
         for i in range(len(data)):
-            # Java: i++; if (i == len) i=0; xor key[i]
-            # This means for data[0], we use key[1].
             key_idx += 1
             if key_idx == len(key):
                 key_idx = 0
@@ -50,11 +48,31 @@ class CossCrypto:
         return result.decode('utf-8')
 
     @staticmethod
-    def generate_client_secret(imei: str, random_secret: bytes, pin: str) -> bytes:
+    def calculate_client_secret_scalar(imei: str, random_secret: bytes, pin: str) -> bytes:
+        """
+        Calculates the scalar 'd' (private key share).
+        Logic: b(b(hash(IMEI), hash(PIN)), random_secret)
+        """
         h_imei = CossCrypto.sm3_hash(imei.encode('utf-8'))
         h_pin = CossCrypto.sm3_hash(pin.encode('utf-8'))
         xor1 = CossCrypto.xor_bytes(h_imei, h_pin)
         return CossCrypto.xor_bytes(xor1, random_secret)
+
+    @staticmethod
+    def calculate_client_secret_point(scalar_bytes: bytes) -> bytes:
+        """
+        Calculates P = d * G. Returns uncompressed bytes (04 + 32x + 32y).
+        Used for 'genkey' request.
+        """
+        d = SM2Math.bytes_to_int(scalar_bytes)
+        G = (SM2_Gx, SM2_Gy)
+        P = SM2Math.point_mul(d, G)
+        
+        x_bytes = SM2Math.int_to_bytes(P[0])
+        y_bytes = SM2Math.int_to_bytes(P[1])
+        
+        # 0x04 prefix for uncompressed point
+        return b'\x04' + x_bytes + y_bytes
 
     @staticmethod
     def server_sem_sign(sign_param_point_bytes, client_secret_bytes, hash_scalar_bytes):
@@ -80,3 +98,10 @@ class CossCrypto:
             SM2Math.int_to_bytes(s2),
             SM2Math.int_to_bytes(s3)
         ]
+
+    @staticmethod
+    def generate_fake_imei(package_name="cn.org.bjca.signet.coss.app") -> str:
+        android_id = secrets.token_hex(8) 
+        combined = android_id + package_name
+        hashed = CossCrypto.sha1_hash(combined.encode('utf-8'))
+        return base64.b64encode(hashed).decode('utf-8')

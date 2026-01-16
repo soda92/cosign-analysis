@@ -7,9 +7,12 @@ from urllib.parse import urlparse
 from ..crypto.utils import CossCrypto
 
 class CossClient:
-    def __init__(self, base_url="https://coss.bjca.org.cn", app_id="BJCA_COSS_APP", state_file="coss_identity.json"):
+    # Default AppID from observation, though QR overrides it usually
+    DEFAULT_APP_ID = "APP_09613F880BA343DC95E31B17096A0471"
+    
+    def __init__(self, base_url="https://coss.bjca.org.cn", app_id=None, state_file="coss_identity.json"):
         self.base_url = base_url
-        self.app_id = app_id
+        self.app_id = app_id or self.DEFAULT_APP_ID
         self.state_file = state_file
         
         self.device_name = "Python_Client"
@@ -22,7 +25,6 @@ class CossClient:
         self._load_or_generate_identity()
 
     def _load_or_generate_identity(self):
-        """Loads IMEI and keys from state file, or generates a new random IMEI."""
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, "r") as f:
@@ -34,12 +36,12 @@ class CossClient:
                 
                 print(f"[*] Loaded existing identity: IMEI={self.imei}")
                 
-                # Load other fields if they exist (useful for re-running or login)
                 self.mssp_id = data.get("mssp_id")
                 if data.get("base_url"):
                     self.base_url = data.get("base_url")
+                if data.get("app_id"):
+                    self.app_id = data.get("app_id")
                 
-                # Restore keys (stored as Base64 strings)
                 key_map_b64 = data.get("key_map", {})
                 self.key_map = {k: base64.b64decode(v) for k, v in key_map_b64.items()}
                 
@@ -47,18 +49,15 @@ class CossClient:
             except Exception as e:
                 print(f"[!] Failed to load state file: {e}")
         
-        # Generate new random IMEI (15 digits, starting with 86 for China)
-        # 86 + 13 random digits
-        suffix = "".join([str(secrets.randbelow(10)) for _ in range(13)])
-        self.imei = f"86{suffix}"
+        # Generate correct format IMEI: Base64(SHA1(AndroidID + PackageName))
+        self.imei = CossCrypto.generate_fake_imei()
         print(f"[*] Generated new identity: IMEI={self.imei}")
 
     def register_with_auth_code(self, qr_content: str):
-        # 1. Parse QR JSON
         try:
             qr_json = json.loads(qr_content)
             
-            # Update Base URL if present
+            # 1. Update Base URL
             if 'sUrl' in qr_json:
                 if '/mobile/' in qr_json['sUrl']:
                     self.base_url = qr_json['sUrl'].split('/mobile/')[0]
@@ -66,21 +65,24 @@ class CossClient:
                     self.base_url = qr_json['sUrl']
                 print(f"[*] Updated Base URL: {self.base_url}")
 
-            # Decrypt 'o' field
+            # 2. Update App ID (Critical fix for "Access Party ID does not exist")
+            if 'id' in qr_json:
+                self.app_id = qr_json['id']
+                print(f"[*] Updated App ID: {self.app_id}")
+
+            # 3. Decrypt 'o' field
             if 'o' in qr_json:
                 decrypted_o = CossCrypto.decrypt_qr_o(qr_json['o'])
                 print(f"[*] Decrypted 'o': {decrypted_o}")
-                # This should be JSON: {"type":"ACTIVEUSER","data":"..."}
                 o_json = json.loads(decrypted_o)
                 if o_json.get('type') == 'ACTIVEUSER':
                     real_auth_code = o_json.get('data')
                 else:
-                    real_auth_code = decrypted_o # Fallback
+                    real_auth_code = decrypted_o 
             else:
-                real_auth_code = qr_content # Raw string fallback
+                real_auth_code = qr_content
 
         except json.JSONDecodeError:
-            # Maybe it's just the raw auth code string
             real_auth_code = qr_content
 
         url = f"{self.base_url}/mobile/v1/regwithauthcode"
@@ -108,10 +110,7 @@ class CossClient:
         self.policy = json.loads(data['policy'])
         
         print(f"[+] Registered! MSSP_ID: {self.mssp_id}")
-        
-        # Save state immediately after registration to persist MSSP_ID/URL
         self._save_state()
-        
         return self.policy
 
     def generate_keys(self, pin: str):
@@ -212,7 +211,8 @@ class CossClient:
             "imei": self.imei,
             "mssp_id": self.mssp_id,
             "key_map": {k: base64.b64encode(v).decode('utf-8') for k, v in self.key_map.items()},
-            "base_url": self.base_url
+            "base_url": self.base_url,
+            "app_id": self.app_id
         }
         with open(self.state_file, "w") as f:
             json.dump(state, f, indent=2)
